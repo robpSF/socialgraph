@@ -19,7 +19,7 @@ def main():
        - **Name**  
        - **Handle**  (unique identifier)  
        - **Faction**  
-       - **Tags** (possible tags include "#hub", "#hub_uk", "#uk", etc.)  
+       - **Tags**  
        - **TwHandle** (optional)  
        - **TwFollowers** (desired # of followers)  
        - **TwFollowing** (desired # of followings)  
@@ -28,11 +28,13 @@ def main():
        - **Country-Specific Hub Probability**: if \u201C#hub_xxx\u201D in V's tags and \u201C#xxx\u201D in U's tags  
        - **Global Hub Probability**: if V is tagged as \u201C#hub\u201D (international hub)  
        - **Intra-Faction Probability**: if neither is a hub, but U and V share the same faction  
-       - **Inter-Faction Probability**: if neither is a hub, and U and V are in different factions  
+       - **Inter-Faction Probability**: if neither is a hub and U and V are in different factions  
 
     3. The app will create a synthetic "who-follows-whom" graph that tries to match each user’s follower/following counts.  
 
-    4. Scroll down to see a table of edges and an interactive network diagram.
+    4. Finally, it ensures that each user follows at least 2 others and is followed by at least 2 others.  
+
+    5. Scroll down to see a table of edges and an interactive network diagram.
     """)
 
     # Sliders for adjusting probabilities
@@ -109,9 +111,10 @@ def generate_social_graph(df,
       2) Else if target (V) is a global hub (#hub),
          use hub_global_probability.
       3) Else if same faction, use p_intra_faction.
-      4) Else use p_inter_faction.
+      4) Otherwise, use p_inter_faction.
 
-    Also tries to respect each user's TwFollowers & TwFollowing counts.
+    Also tries to respect each user's TwFollowers & TwFollowing counts,
+    then ensures everyone has at least 2 followers & 2 followings.
     """
 
     # Convert to a list of dicts for easier handling
@@ -132,7 +135,7 @@ def generate_social_graph(df,
     # We'll store edges as tuples: (follower_handle, followed_handle)
     edges = []
 
-    # For each user U, pick who they follow
+    # 1) MAIN GENERATION: For each user U, pick who they follow
     for U in personas:
         # potential targets
         possible_targets = [p for p in personas if p["Handle"] != U["Handle"]]
@@ -166,6 +169,9 @@ def generate_social_graph(df,
                 U["f_current"]  += 1
                 V["F_current"]  += 1
 
+    # 2) FINAL FIX: Ensure everyone has >=2 followers and >=2 followings
+    edges = ensure_minimum_two(personas, edges)
+
     return edges
 
 
@@ -192,15 +198,12 @@ def base_probability(U, V,
     """
 
     # 1) Check for a country-specific hub tag (#hub_xxx)
-    #    e.g., #hub_uk, #hub_france, etc.
     hub_country_tag = find_country_hub_tag(V["tag_list"])
     if hub_country_tag is not None:
         # e.g. hub_country_tag == 'uk' if V has '#hub_uk'
-        # Check if user U also has '#uk' in their tags
         if f"#{hub_country_tag}" in U["tag_list"]:
             return hub_country_probability
-        # If user doesn't have the matching country tag,
-        # we fallback to normal faction logic at the bottom.
+        # Otherwise, we continue to the next checks
 
     # 2) Check if V is a global hub (#hub)
     if "#hub" in V["tag_list"]:
@@ -225,8 +228,113 @@ def find_country_hub_tag(tag_list):
             return tag.split("_", 1)[1]
     return None
 
+
 #############################
-# 3. NETWORK DIAGRAM        #
+# 3. FINAL FIX LOGIC        #
+#############################
+
+def ensure_minimum_two(personas, edges):
+    """
+    Ensure that each persona follows at least 2 others and
+    is followed by at least 2 others.
+
+    1) Build adjacency from edges.
+    2) For each persona, if they have <2 followings or <2 followers,
+       we try to fix by:
+         - "Following back" someone who follows them, or
+         - Randomly following someone else, or
+         - Randomly letting others follow them if they have <2 followers.
+    3) Repeat until all have >=2 or we reach a max iteration limit.
+    """
+
+    # Convert list of edges into adjacency dict for quick lookups
+    # out_edges[u] = set of v that u follows
+    # in_edges[v]  = set of u that follow v
+    out_edges = {}
+    in_edges = {}
+    for p in personas:
+        out_edges[p["Handle"]] = set()
+        in_edges[p["Handle"]] = set()
+
+    for (u, v) in edges:
+        out_edges[u].add(v)
+        in_edges[v].add(u)
+
+    # We'll do multiple passes until stable or max tries
+    max_tries = 1000
+    tries = 0
+    n = len(personas)
+
+    while tries < max_tries:
+        tries += 1
+        changed = False
+
+        for p in personas:
+            me  = p["Handle"]
+            f_count = len(out_edges[me])  # how many I'm following
+            F_count = len(in_edges[me])   # how many follow me
+
+            # Fix: need at least 2 followings
+            if f_count < 2:
+                # 1) If any follower is not yet followed back, do a follow back
+                potential_follow_backs = [follower for follower in in_edges[me]
+                                          if me not in out_edges[follower]]  
+                # follower is in_edges[me] -> that means they follow me
+                # out_edges[follower] doesn't contain me -> means I don't follow them yet
+
+                if potential_follow_backs:
+                    target = random.choice(potential_follow_backs)
+                    out_edges[me].add(target)
+                    in_edges[target].add(me)
+                    changed = True
+                else:
+                    # 2) Otherwise pick a random new target from the entire set
+                    # that is not me and not already followed
+                    all_handles = [x["Handle"] for x in personas if x["Handle"] != me]
+                    random_target = random.choice(all_handles)
+                    if random_target not in out_edges[me]:
+                        out_edges[me].add(random_target)
+                        in_edges[random_target].add(me)
+                        changed = True
+
+            # Fix: need at least 2 followers
+            if F_count < 2:
+                # Let someone follow me if possible
+                # 1) Maybe "follow back" one I follow but who doesn't follow me?
+                potential_followers = [x for x in out_edges[me]
+                                       if me not in out_edges[x]]  
+                # x in out_edges[me] means I follow x
+                # out_edges[x] is who x follows
+                # if me not in out_edges[x], that means x doesn't follow me
+
+                if potential_followers:
+                    target = random.choice(potential_followers)
+                    out_edges[target].add(me)
+                    in_edges[me].add(target)
+                    changed = True
+                else:
+                    # 2) Or pick a random user to follow me
+                    all_handles = [x["Handle"] for x in personas if x["Handle"] != me]
+                    random_user = random.choice(all_handles)
+                    if me not in out_edges[random_user]:
+                        out_edges[random_user].add(me)
+                        in_edges[me].add(random_user)
+                        changed = True
+
+        if not changed:
+            break  # no more changes needed
+
+    # Rebuild the edge list
+    final_edges = []
+    for u in out_edges:
+        for v in out_edges[u]:
+            final_edges.append((u, v))
+
+    return final_edges
+
+
+#############################
+# 4. NETWORK DIAGRAM        #
 #############################
 
 def display_network_graph(edges):
@@ -240,7 +348,6 @@ def display_network_graph(edges):
         G.add_node(followed)
         G.add_edge(follower, followed)
 
-    # Convert to PyVis for interactive visualization
     net = Network(height="600px", width="100%", directed=True, bgcolor="#222222", font_color="white")
     net.toggle_physics(True)
 
@@ -259,7 +366,7 @@ def display_network_graph(edges):
     st.components.v1.html(html_data, height=600, scrolling=True)
 
 #############################
-# 4. RUN THE APP            #
+# 5. RUN THE APP            #
 #############################
 
 if __name__ == "__main__":
