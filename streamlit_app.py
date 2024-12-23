@@ -19,22 +19,24 @@ def main():
        - **Name**  
        - **Handle**  (unique identifier)  
        - **Faction**  
-       - **Tags**  
+       - **Tags**  (e.g. "#hub", "#hub_uk", "#uk", etc.)
        - **TwHandle** (optional)  
        - **TwFollowers** (desired # of followers)  
        - **TwFollowing** (desired # of followings)  
 
     2. Set the probabilities below:
-       - **Country-Specific Hub Probability**: if \u201C#hub_xxx\u201D in V's tags and \u201C#xxx\u201D in U's tags  
-       - **Global Hub Probability**: if V is tagged as \u201C#hub\u201D (international hub)  
+       - **Country-Specific Hub Probability**: if “#hub_xxx” in V's tags and “#xxx” in U's tags  
+       - **Global Hub Probability**: if V is tagged “#hub” (international hub)  
        - **Intra-Faction Probability**: if neither is a hub, but U and V share the same faction  
        - **Inter-Faction Probability**: if neither is a hub and U and V are in different factions  
 
-    3. The app will create a synthetic "who-follows-whom" graph that tries to match each user’s follower/following counts.  
+    3. **Bandwagon Effect**: controls how much having a lot of followers boosts the chance of getting new ones.  
 
-    4. Finally, it ensures that each user follows at least 2 others and is followed by at least 2 others.  
+    4. The app will create a synthetic "who-follows-whom" graph, respecting each user’s target followers/following.  
 
-    5. Scroll down to see a table of edges and an interactive network diagram.
+    5. Finally, it ensures that each user follows at least 2 others and is followed by at least 2 others.  
+
+    6. Scroll down to see a table of edges and an interactive network diagram.
     """)
 
     # Sliders for adjusting probabilities
@@ -53,6 +55,10 @@ def main():
     p_inter_faction = st.slider(
         "Probability if different Faction (and not a hub)",
         0.0, 1.0, 0.1, 0.05
+    )
+    bandwagon_scale = st.slider(
+        "Bandwagon Effect Scale (0 = none, higher = stronger effect)",
+        0.0, 2.0, 0.5, 0.1
     )
 
     uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
@@ -76,7 +82,8 @@ def main():
                 hub_country_probability,
                 hub_global_probability,
                 p_intra_faction,
-                p_inter_faction
+                p_inter_faction,
+                bandwagon_scale
             )
 
             # Display Edges as a data frame
@@ -96,11 +103,14 @@ def main():
 # 2. GRAPH GENERATION LOGIC #
 #############################
 
-def generate_social_graph(df, 
-                          hub_country_probability=0.6,
-                          hub_global_probability=0.5,
-                          p_intra_faction=0.3, 
-                          p_inter_faction=0.1):
+def generate_social_graph(
+    df, 
+    hub_country_probability=0.6,
+    hub_global_probability=0.5,
+    p_intra_faction=0.3, 
+    p_inter_faction=0.1,
+    bandwagon_scale=0.5
+):
     """
     Given a DataFrame with columns:
      - Name, Handle, Faction, Tags, TwHandle, TwFollowers, TwFollowing
@@ -113,8 +123,12 @@ def generate_social_graph(df,
       3) Else if same faction, use p_intra_faction.
       4) Otherwise, use p_inter_faction.
 
-    Also tries to respect each user's TwFollowers & TwFollowing counts,
-    then ensures everyone has at least 2 followers & 2 followings.
+    Then apply a bandwagon effect, meaning if V has many followers
+    already, that increases their chance of getting new followers
+    by 'bandwagon_scale'.
+
+    After main generation, ensure everyone has at least 2 followers
+    and 2 followings.
     """
 
     # Convert to a list of dicts for easier handling
@@ -132,36 +146,36 @@ def generate_social_graph(df,
     # Shuffle to add randomness to iteration order
     random.shuffle(personas)
 
-    # We'll store edges as tuples: (follower_handle, followed_handle)
-    edges = []
+    edges = []  # (follower_handle, followed_handle)
 
-    # 1) MAIN GENERATION: For each user U, pick who they follow
+    # MAIN GENERATION: For each user U, pick who they follow
     for U in personas:
-        # potential targets
         possible_targets = [p for p in personas if p["Handle"] != U["Handle"]]
         random.shuffle(possible_targets)
 
-        # Keep trying until we reach f_desired
         while U["f_current"] < U["f_desired"] and possible_targets:
             V = possible_targets.pop()  # pick from the end
 
-            # Calculate base probability
+            # 1) Base probability (faction/hub logic)
             p = base_probability(U, V,
                                  hub_country_probability,
                                  hub_global_probability,
                                  p_intra_faction,
                                  p_inter_faction)
 
-            # Adjust if V is at or above its desired follower count
-            if V["F_current"] >= V["F_desired"]:
-                # drastically reduce p, but not to zero
-                p *= 0.2
-            else:
-                # slight boost if V is still below desired
-                shortfall_ratio = (V["F_desired"] - V["F_current"]) / max(1, V["F_desired"])
-                p += p * 0.2 * shortfall_ratio
+            # 2) Apply bandwagon effect: more followers => more attractiveness
+            #    ratio = F_current / F_desired
+            #    factor = 1 + bandwagon_scale * ratio
+            #    e.g. if ratio=0.8 and bandwagon_scale=0.5 => factor=1+0.5*0.8=1.4
+            bandwagon_ratio = V["F_current"] / max(1, V["F_desired"])
+            bandwagon_factor = 1 + bandwagon_scale * bandwagon_ratio
+            p *= bandwagon_factor
 
-            # Random draw
+            # 3) If V is at or above desired, drastically reduce p
+            if V["F_current"] >= V["F_desired"]:
+                p *= 0.2
+
+            # 4) Random draw
             r = random.random()
             if r < p:
                 # U follows V
@@ -169,7 +183,7 @@ def generate_social_graph(df,
                 U["f_current"]  += 1
                 V["F_current"]  += 1
 
-    # 2) FINAL FIX: Ensure everyone has >=2 followers and >=2 followings
+    # FINAL FIX: Ensure everyone has >=2 followers and >=2 followings
     edges = ensure_minimum_two(personas, edges)
 
     return edges
@@ -203,18 +217,17 @@ def base_probability(U, V,
         # e.g. hub_country_tag == 'uk' if V has '#hub_uk'
         if f"#{hub_country_tag}" in U["tag_list"]:
             return hub_country_probability
-        # Otherwise, we continue to the next checks
+        # Otherwise, fallback to next rule
 
     # 2) Check if V is a global hub (#hub)
     if "#hub" in V["tag_list"]:
         return hub_global_probability
 
-    # 3) Check faction
+    # 3) Faction-based
     if U["Faction"] == V["Faction"]:
         return p_intra_faction
-
-    # 4) Otherwise, inter-faction
-    return p_inter_faction
+    else:
+        return p_inter_faction
 
 
 def find_country_hub_tag(tag_list):
@@ -224,8 +237,7 @@ def find_country_hub_tag(tag_list):
     """
     for tag in tag_list:
         if tag.startswith("#hub_") and len(tag) > 5:
-            # e.g. tag might be '#hub_uk' => return 'uk'
-            return tag.split("_", 1)[1]
+            return tag.split("_", 1)[1]  # e.g. '#hub_uk' => 'uk'
     return None
 
 
@@ -242,25 +254,21 @@ def ensure_minimum_two(personas, edges):
     2) For each persona, if they have <2 followings or <2 followers,
        we try to fix by:
          - "Following back" someone who follows them, or
-         - Randomly following someone else, or
+         - Randomly following someone else,
          - Randomly letting others follow them if they have <2 followers.
     3) Repeat until all have >=2 or we reach a max iteration limit.
     """
 
-    # Convert list of edges into adjacency dict for quick lookups
-    # out_edges[u] = set of v that u follows
-    # in_edges[v]  = set of u that follow v
     out_edges = {}
-    in_edges = {}
+    in_edges  = {}
     for p in personas:
         out_edges[p["Handle"]] = set()
-        in_edges[p["Handle"]] = set()
+        in_edges[p["Handle"]]  = set()
 
     for (u, v) in edges:
         out_edges[u].add(v)
         in_edges[v].add(u)
 
-    # We'll do multiple passes until stable or max tries
     max_tries = 1000
     tries = 0
     n = len(personas)
@@ -276,20 +284,18 @@ def ensure_minimum_two(personas, edges):
 
             # Fix: need at least 2 followings
             if f_count < 2:
-                # 1) If any follower is not yet followed back, do a follow back
-                potential_follow_backs = [follower for follower in in_edges[me]
-                                          if me not in out_edges[follower]]  
-                # follower is in_edges[me] -> that means they follow me
-                # out_edges[follower] doesn't contain me -> means I don't follow them yet
-
+                # 1) If any follower is not followed back, follow them
+                potential_follow_backs = [
+                    follower for follower in in_edges[me]
+                    if me not in out_edges[follower]
+                ]
                 if potential_follow_backs:
                     target = random.choice(potential_follow_backs)
                     out_edges[me].add(target)
                     in_edges[target].add(me)
                     changed = True
                 else:
-                    # 2) Otherwise pick a random new target from the entire set
-                    # that is not me and not already followed
+                    # 2) Otherwise pick a random new target
                     all_handles = [x["Handle"] for x in personas if x["Handle"] != me]
                     random_target = random.choice(all_handles)
                     if random_target not in out_edges[me]:
@@ -299,21 +305,18 @@ def ensure_minimum_two(personas, edges):
 
             # Fix: need at least 2 followers
             if F_count < 2:
-                # Let someone follow me if possible
-                # 1) Maybe "follow back" one I follow but who doesn't follow me?
-                potential_followers = [x for x in out_edges[me]
-                                       if me not in out_edges[x]]  
-                # x in out_edges[me] means I follow x
-                # out_edges[x] is who x follows
-                # if me not in out_edges[x], that means x doesn't follow me
-
+                # 1) "follow back" one I follow but who doesn't follow me
+                potential_followers = [
+                    x for x in out_edges[me]
+                    if me not in out_edges[x]
+                ]
                 if potential_followers:
                     target = random.choice(potential_followers)
                     out_edges[target].add(me)
                     in_edges[me].add(target)
                     changed = True
                 else:
-                    # 2) Or pick a random user to follow me
+                    # 2) random user to follow me
                     all_handles = [x["Handle"] for x in personas if x["Handle"] != me]
                     random_user = random.choice(all_handles)
                     if me not in out_edges[random_user]:
@@ -322,14 +325,13 @@ def ensure_minimum_two(personas, edges):
                         changed = True
 
         if not changed:
-            break  # no more changes needed
+            break
 
-    # Rebuild the edge list
+    # Rebuild edge list
     final_edges = []
     for u in out_edges:
         for v in out_edges[u]:
             final_edges.append((u, v))
-
     return final_edges
 
 
@@ -341,7 +343,6 @@ def display_network_graph(edges):
     """
     Display the network using PyVis inside Streamlit.
     """
-    # Build a NetworkX graph first
     G = nx.DiGraph()
     for (follower, followed) in edges:
         G.add_node(follower)
@@ -357,7 +358,6 @@ def display_network_graph(edges):
     for edge in G.edges():
         net.add_edge(edge[0], edge[1])
 
-    # Generate HTML in a temp file and then render
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         tmp_file.seek(0)
