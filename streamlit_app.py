@@ -146,7 +146,7 @@ def generate_social_graph(
     # Shuffle to add randomness to iteration order
     random.shuffle(personas)
 
-    edges = []  # (follower_handle, followed_handle)
+    edges = []  # list of (follower_handle, followed_handle)
 
     # MAIN GENERATION: For each user U, pick who they follow
     for U in personas:
@@ -166,7 +166,6 @@ def generate_social_graph(
             # 2) Apply bandwagon effect: more followers => more attractiveness
             #    ratio = F_current / F_desired
             #    factor = 1 + bandwagon_scale * ratio
-            #    e.g. if ratio=0.8 and bandwagon_scale=0.5 => factor=1+0.5*0.8=1.4
             bandwagon_ratio = V["F_current"] / max(1, V["F_desired"])
             bandwagon_factor = 1 + bandwagon_scale * bandwagon_ratio
             p *= bandwagon_factor
@@ -217,7 +216,7 @@ def base_probability(U, V,
         # e.g. hub_country_tag == 'uk' if V has '#hub_uk'
         if f"#{hub_country_tag}" in U["tag_list"]:
             return hub_country_probability
-        # Otherwise, fallback to next rule
+        # Otherwise, fallback
 
     # 2) Check if V is a global hub (#hub)
     if "#hub" in V["tag_list"]:
@@ -342,7 +341,9 @@ def ensure_minimum_two(personas, edges):
 def display_network_graph(edges):
     """
     Display the network using PyVis inside Streamlit.
+    Node size is scaled by the number of incoming edges (in-degree).
     """
+    # Build a directed NetworkX graph
     G = nx.DiGraph()
     for (follower, followed) in edges:
         G.add_node(follower)
@@ -352,18 +353,37 @@ def display_network_graph(edges):
     net = Network(height="600px", width="100%", directed=True, bgcolor="#222222", font_color="white")
     net.toggle_physics(True)
 
-    # Add nodes and edges
+    # Compute in-degree (number of followers)
+    in_degs = dict(G.in_degree())
+
+    # Add nodes with size based on in-degree
     for node in G.nodes():
-        net.add_node(node, label=node)
+        in_degree_val = in_degs[node]
+        base_size = 10
+        scale_factor = 3
+        node_size = base_size + scale_factor * in_degree_val
+
+        tooltip_text = f"{node}\nIn-degree (followers): {in_degree_val}"
+
+        net.add_node(
+            node, 
+            label=node, 
+            size=node_size,
+            title=tooltip_text
+        )
+
+    # Add edges
     for edge in G.edges():
         net.add_edge(edge[0], edge[1])
 
+    # Generate and render HTML
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         tmp_file.seek(0)
         html_data = tmp_file.read().decode("utf-8")
 
     st.components.v1.html(html_data, height=600, scrolling=True)
+
 
 #############################
 # 5. RUN THE APP            #
