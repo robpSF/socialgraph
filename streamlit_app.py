@@ -35,7 +35,7 @@ def main():
     3. The **app** will create:
        - A synthetic "who-follows-whom" graph
          (ensuring each user follows at least 2 others & is followed by at least 2 others).
-       - A PyVis **Network Diagram**.
+       - *Optionally*, a PyVis **Network Diagram** (you can toggle it below).
        - A **Downloadable Excel** matrix with adjacency codes (1,2,3,0).
     """)
 
@@ -71,6 +71,9 @@ def main():
         0, 50000, 1000, 100
     )
 
+    # NEW: Toggle for showing the network diagram
+    show_diagram = st.checkbox("Show Network Diagram", value=False)
+
     uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
     if uploaded_file is not None:
         try:
@@ -102,9 +105,10 @@ def main():
             edges_df = pd.DataFrame(edges, columns=["Follower", "Followed"])
             st.dataframe(edges_df)
 
-            # Display a network diagram (label with Name, not Handle)
-            st.write("### Network Diagram (Nodes labeled by Name)")
-            display_network_graph(edges, handle_to_name)
+            # Conditionally display the network diagram (default OFF)
+            if show_diagram:
+                st.write("### Network Diagram (Nodes labeled by Name)")
+                display_network_graph(edges, handle_to_name)
 
             # Finally, let user download the Excel adjacency
             st.write("### Download Excel of the Network")
@@ -374,10 +378,9 @@ def create_downloadable_excel(personas, edges):
       - Row 2, Col E+ => node Factions
       - Row 2, Col A-D => "Persona", "Handle", "Social Handle", "Faction"
       - Row i+3 => each node's data in Col A-D
-      - Intersecting cells => 1, 2, 3, 0 adjacency codes
+      - Intersecting cells => 1,2,3,0 adjacency codes
     Returns the raw binary of the Excel file.
     """
-    # We'll keep the same node order as 'personas'
     n = len(personas)
     handle_to_index = {}
     index_to_handle = []
@@ -401,17 +404,14 @@ def create_downloadable_excel(personas, edges):
             out_edges[u].add(v)
 
     # Build code matrix
-    # code[i][j] = 1,2,3,0
     code = [[0]*n for _ in range(n)]
     for i in range(n):
         for j in range(n):
             if i == j:
                 code[i][j] = 0
             else:
-                # does i follow j?
-                ij = (j in out_edges[i])
-                # does j follow i?
-                ji = (i in out_edges[j])
+                ij = (j in out_edges[i])  # i->j
+                ji = (i in out_edges[j])  # j->i
                 if ij and ji:
                     code[i][j] = 2
                 elif ij:
@@ -421,27 +421,26 @@ def create_downloadable_excel(personas, edges):
                 else:
                     code[i][j] = 0
 
-    # Create Excel in memory
     output = BytesIO()
     workbook = xlsxwriter.Workbook(output, {'in_memory': True})
     worksheet = workbook.add_worksheet("Network")
 
-    # Row 2, cols A-D => labels
+    # Row 2, cols A-D => headers
     worksheet.write(1, 0, "Persona")
     worksheet.write(1, 1, "Handle")
     worksheet.write(1, 2, "Social Handle")
     worksheet.write(1, 3, "Faction")
 
-    # Row 1, from Col E => node handles
-    # Row 2, from Col E => node factions
+    # Row 1, from col E => node handles
+    # Row 2, from col E => node factions
     for j in range(n):
         worksheet.write(0, 4 + j, index_to_handle[j])
         worksheet.write(1, 4 + j, index_to_faction[j])
 
-    # Rows 3+ => each node i
+    # Rows 3+ => each node
     for i in range(n):
         row_i = i + 2
-        # A-D => name, handle, social, faction
+        # A-D => name, handle, TwHandle, faction
         worksheet.write(row_i, 0, index_to_name[i])
         worksheet.write(row_i, 1, index_to_handle[i])
         worksheet.write(row_i, 2, index_to_tw[i])
