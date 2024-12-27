@@ -4,3 +4,4 @@ openpyxl
 networkx
 pyvis
 numpy
+xlsxwriter
