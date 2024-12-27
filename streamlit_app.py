@@ -33,8 +33,9 @@ def main():
     3. **Bandwagon Effect** (Only Based on `TwFollowers`):
        If V has a high TwFollowers (compared to the dataset max), it is more likely to be followed.
 
-    4. **Prevent "Big Follows Small"**:
-       If U has way more TwFollowers than V, drastically reduce the probability that U follows V.
+    4. **Big-Follows-Small Controls**:
+       - **Ratio Threshold**: If U's TwFollowers / V's TwFollowers exceeds this, U won't follow V.
+       - **Min Follower Cutoff**: If V's TwFollowers is below this cutoff, big users won't follow them at all.
 
     5. The app will create a synthetic "who-follows-whom" graph, ensuring each user follows at least 2 others and is followed by at least 2 others.
 
@@ -63,6 +64,16 @@ def main():
         0.0, 2.0, 0.5, 0.1
     )
 
+    # New controls for Big-Follows-Small
+    big_follow_threshold = st.slider(
+        "Big-Follows-Small Ratio Threshold (if U's TwFollowers / V's TwFollowers > this, no follow)",
+        1.0, 10.0, 3.0, 0.5
+    )
+    min_follow_cutoff = st.slider(
+        "Minimum TwFollowers cutoff (if V has fewer than this, big user won't follow)",
+        0, 50000, 1000, 100
+    )
+
     uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
     if uploaded_file is not None:
         try:
@@ -85,7 +96,9 @@ def main():
                 hub_global_probability,
                 p_intra_faction,
                 p_inter_faction,
-                bandwagon_scale
+                bandwagon_scale,
+                big_follow_threshold,
+                min_follow_cutoff
             )
 
             # Display Edges as a data frame
@@ -111,20 +124,23 @@ def generate_social_graph(
     hub_global_probability=0.5,
     p_intra_faction=0.3, 
     p_inter_faction=0.1,
-    bandwagon_scale=0.5
+    bandwagon_scale=0.5,
+    big_follow_threshold=3.0,
+    min_follow_cutoff=1000
 ):
     """
     Generate a synthetic social graph, returning:
       edges: list of (follower_handle, followed_handle)
       handle_to_name: map handle -> Name
 
-    Logic:
+    Steps:
       1) Faction/hub base probability.
-      2) Bandwagon effect based on V["TwFollowers"] vs. the dataset max.
-      3) Prevent "big" U from following "small" V by drastically reducing p
-         if TwFollowers(U) is much greater than TwFollowers(V).
+      2) Bandwagon effect (V's TwFollowers vs. dataset max).
+      3) "Big-Follows-Small" logic:
+         - If U's TwFollowers / V's TwFollowers > big_follow_threshold => p=0.
+         - If V["TwFollowers"] < min_follow_cutoff => p=0 if U is big.
       4) If V is "full", reduce p.
-      5) Finally ensure min=2 followers/following.
+      5) Ensure everyone has min=2 followers/following.
     """
 
     personas = df.to_dict("records")
@@ -138,13 +154,12 @@ def generate_social_graph(
         person["f_current"]  = 0
         person["tag_list"]   = str(person["Tags"]).lower().split()
 
-    # Find max TwFollowers for the bandwagon effect
+    # Find max TwFollowers for bandwagon
     max_desired_followers = max([p["TwFollowers"] for p in personas if p["TwFollowers"] > 0] or [1])
 
     random.shuffle(personas)
     edges = []
 
-    # MAIN LOOP
     for U in personas:
         possible_targets = [p for p in personas if p["Handle"] != U["Handle"]]
         random.shuffle(possible_targets)
@@ -161,30 +176,38 @@ def generate_social_graph(
                 p_inter_faction
             )
 
-            # 2) Bandwagon effect (based on V)
+            # 2) Bandwagon effect
             bandwagon_ratio = V["TwFollowers"] / max_desired_followers
             bandwagon_factor = 1 + bandwagon_scale * bandwagon_ratio
             p *= bandwagon_factor
 
-            # 3) Prevent big from following small: if U is significantly bigger than V
-            #    e.g. ratio threshold = 3.0 => if U has triple or more TwFollowers than V.
-            big_follow_threshold = 3.0
-            ratio_uf_to_vf = (U["TwFollowers"] / max(1, V["TwFollowers"])) if V["TwFollowers"] > 0 else 9999
-            if ratio_uf_to_vf > big_follow_threshold:
-                p *= 0.2  # drastically reduce
+            # 3) Big-Follows-Small logic
+            #    (a) ratio check
+            ratio_uf_to_vf = U["TwFollowers"] / max(1, V["TwFollowers"]) if V["TwFollowers"]>0 else 99999
+            #    (b) cutoff check
+            # "If V has fewer than min_follow_cutoff, big user won't follow"
+            # We define "big user" as someone with TwFollowers >= the min_follow_cutoff * big_follow_threshold?
+            # Or simply if U's TwFollowers is large enough to exceed the ratio threshold?
+            # We'll interpret "big user" as ratio_uf_to_vf > 1.0 (meaning U is bigger than V).
+            # But you might refine that definition if needed.
+            
+            is_U_big = (ratio_uf_to_vf > 1.0)  # means U has more TwFollowers than V
+            # If ratio is above threshold OR V < cutoff => p=0 if U is indeed "big" compared to V
+            if ratio_uf_to_vf > big_follow_threshold or (V["TwFollowers"] < min_follow_cutoff and is_U_big):
+                p = 0.0
 
-            # 4) If V is "full" (exceeded desired), reduce p
+            # 4) If V is "full"
             if V["F_current"] >= V["F_desired"]:
                 p *= 0.2
 
-            # Random draw
+            # Decide
             r = random.random()
             if r < p:
                 edges.append((U["Handle"], V["Handle"]))
                 U["f_current"] += 1
                 V["F_current"] += 1
 
-    # Ensure min=2
+    # Final fix => ensure min=2
     edges = ensure_minimum_two(personas, edges)
 
     return edges, handle_to_name
