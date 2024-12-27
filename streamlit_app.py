@@ -37,7 +37,7 @@ def main():
 
     5. Finally, it ensures that each user follows at least 2 others and is followed by at least 2 others.  
 
-    6. Scroll down to see a table of edges and an interactive network diagram.
+    6. In the **Network Diagram**, each node is labeled with the person's Name. Scroll down to see a table of edges and an interactive network diagram.
     """)
 
     # Sliders for adjusting probabilities
@@ -78,7 +78,7 @@ def main():
             st.success("File uploaded successfully! Generating Social Graph...")
 
             # Generate the graph
-            edges = generate_social_graph(
+            edges, handle_to_name = generate_social_graph(
                 df,
                 hub_country_probability,
                 hub_global_probability,
@@ -92,9 +92,9 @@ def main():
             edges_df = pd.DataFrame(edges, columns=["Follower", "Followed"])
             st.dataframe(edges_df)
 
-            # Display a network diagram
-            st.write("### Network Diagram")
-            display_network_graph(edges)
+            # Display a network diagram (label with Name, not Handle)
+            st.write("### Network Diagram (Nodes labeled by Name)")
+            display_network_graph(edges, handle_to_name)
 
         except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -116,17 +116,18 @@ def generate_social_graph(
     Generate a synthetic social graph, where the bandwagon effect is based
     on the persona's TwFollowers (desired # of followers).
 
-    Steps:
-      1) For each user U, pick who they follow:
-         - Use a base probability (faction/hub logic).
-         - Apply bandwagon effect: if V["TwFollowers"] is large, multiply p.
-         - If V is "full" (F_current >= F_desired), drastically reduce p.
-
-      2) After main generation, ensure everyone has at least 2 followers & 2 following.
+    Returns:
+      - edges: list of (follower_handle, followed_handle)
+      - handle_to_name: dict mapping each handle => Name
     """
 
     # Convert to list of dicts
     personas = df.to_dict("records")
+
+    # We'll also create a quick lookup for Name from Handle
+    handle_to_name = {}
+    for row in personas:
+        handle_to_name[row["Handle"]] = row["Name"]
 
     # Track dynamic counts
     for person in personas:
@@ -161,7 +162,7 @@ def generate_social_graph(
                 p_inter_faction
             )
 
-            # Bandwagon effect based on V["TwFollowers"] vs. the max in dataset
+            # Bandwagon effect based on V["TwFollowers"] vs. the max
             bandwagon_ratio = V["TwFollowers"] / max_desired_followers
             bandwagon_factor = 1 + bandwagon_scale * bandwagon_ratio
             p *= bandwagon_factor
@@ -177,10 +178,10 @@ def generate_social_graph(
                 U["f_current"]  += 1
                 V["F_current"]  += 1
 
-    # Final fix: ensure everyone has >= 2 followers/following
+    # Final fix: ensure everyone has >= 2 followers & 2 following
     edges = ensure_minimum_two(personas, edges)
 
-    return edges
+    return edges, handle_to_name
 
 
 def base_probability(U, V, 
@@ -221,7 +222,7 @@ def find_country_hub_tag(tag_list):
     """
     for tag in tag_list:
         if tag.startswith("#hub_") and len(tag) > 5:
-            return tag.split("_", 1)[1]  # e.g. '#hub_uk' => 'uk'
+            return tag.split("_", 1)[1]
     return None
 
 
@@ -254,8 +255,8 @@ def ensure_minimum_two(personas, edges):
 
         for p in personas:
             me  = p["Handle"]
-            f_count = len(out_edges[me])  # how many I'm following
-            F_count = len(in_edges[me])   # how many follow me
+            f_count = len(out_edges[me])  
+            F_count = len(in_edges[me])   
 
             # Need >= 2 following
             if f_count < 2:
@@ -314,12 +315,12 @@ def ensure_minimum_two(personas, edges):
 # 4. NETWORK DIAGRAM        #
 #############################
 
-def display_network_graph(edges):
+def display_network_graph(edges, handle_to_name):
     """
     Display the network using PyVis inside Streamlit.
     Node size is scaled by number of incoming edges (in-degree).
+    We label each node by its Name instead of its Handle.
     """
-    # Build a directed NetworkX graph
     G = nx.DiGraph()
     for (follower, followed) in edges:
         G.add_node(follower)
@@ -329,30 +330,30 @@ def display_network_graph(edges):
     net = Network(height="600px", width="100%", directed=True, bgcolor="#222222", font_color="white")
     net.toggle_physics(True)
 
-    # Compute in-degree (number of followers)
+    # Compute in-degree
     in_degs = dict(G.in_degree())
 
-    # Add nodes with size based on in-degree
+    # Add nodes with size based on in-degree, label by Name
     for node in G.nodes():
         in_degree_val = in_degs[node]
         base_size = 10
         scale_factor = 3
         node_size = base_size + scale_factor * in_degree_val
 
-        tooltip_text = f"{node}\nFollowers (in-degree): {in_degree_val}"
+        # Use the persona's name for the label
+        name_label = handle_to_name.get(node, node)
+        tooltip_text = f"{name_label}\nFollowers (in-degree): {in_degree_val}"
 
         net.add_node(
             node, 
-            label=node, 
+            label=name_label,       # The visible label is the Name
             size=node_size,
             title=tooltip_text
         )
 
-    # Add edges
     for edge in G.edges():
         net.add_edge(edge[0], edge[1])
 
-    # Generate/Render
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         tmp_file.seek(0)
