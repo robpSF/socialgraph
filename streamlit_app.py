@@ -71,7 +71,7 @@ def main():
         0, 50000, 1000, 100
     )
 
-    # NEW: Toggle for showing the network diagram
+    # Toggle for showing the network diagram (default OFF)
     show_diagram = st.checkbox("Show Network Diagram", value=False)
 
     uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
@@ -269,7 +269,6 @@ def ensure_minimum_two(personas, edges):
 
             # Need >= 2 following
             if f_count < 2:
-                # Follow back someone who follows me but I don't follow them
                 potential_follow_backs = [
                     x for x in in_edges[i] if i not in out_edges[x]
                 ]
@@ -279,7 +278,6 @@ def ensure_minimum_two(personas, edges):
                     in_edges[target].add(i)
                     changed = True
                 else:
-                    # Random new target
                     all_indices = [idx for idx in range(n) if idx != i]
                     random_target = random.choice(all_indices)
                     if random_target not in out_edges[i]:
@@ -289,7 +287,6 @@ def ensure_minimum_two(personas, edges):
 
             # Need >= 2 followers
             if F_count < 2:
-                # let someone I follow => follow me back
                 potential_followers = [
                     x for x in out_edges[i] if i not in out_edges[x]
                 ]
@@ -299,7 +296,6 @@ def ensure_minimum_two(personas, edges):
                     in_edges[i].add(target)
                     changed = True
                 else:
-                    # random user to follow me
                     all_indices = [idx for idx in range(n) if idx != i]
                     random_user = random.choice(all_indices)
                     if i not in out_edges[random_user]:
@@ -327,18 +323,32 @@ def display_network_graph(edges, handle_to_name):
     Node size is scaled by number of incoming edges (in-degree).
     Label each node by its Name, not its Handle.
     """
+    # Build a NetworkX graph for analysis
     G = nx.DiGraph()
     for (follower, followed) in edges:
         G.add_node(follower)
         G.add_node(followed)
         G.add_edge(follower, followed)
 
+    # Create a PyVis network, big height for clarity
     net = Network(height="1200px", width="100%", directed=True, bgcolor="#222222", font_color="white")
-    net.toggle_physics(False)
 
-    # Calculate in-degree
+    # Let the layout run, then stabilize (stop shaking):
+    net.set_options("""
+    var options = {
+      "physics": {
+        "enabled": true,
+        "solver": "barnesHut",
+        "stabilization": {
+          "enabled": true,
+          "iterations": 500
+        }
+      }
+    }
+    """)
+
+    # Calculate in-degree and add nodes
     in_degs = dict(G.in_degree())
-
     for node in G.nodes():
         in_degree_val = in_degs[node]
         base_size = 10
@@ -355,19 +365,17 @@ def display_network_graph(edges, handle_to_name):
             title=tooltip_text
         )
 
+    # Add edges
     for edge in G.edges():
         net.add_edge(edge[0], edge[1])
 
-    # Render HTML
+    # Save to HTML and display in Streamlit
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp_file:
         net.save_graph(tmp_file.name)
         tmp_file.seek(0)
         html_data = tmp_file.read().decode("utf-8")
 
-    #was 600 added width 1200
     st.components.v1.html(html_data, height=1200, width=1200, scrolling=True)
-
-
 
 
 #############################
