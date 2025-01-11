@@ -365,7 +365,7 @@ def display_network_graph(edges, handle_to_name):
         html_data = tmp_file.read().decode("utf-8")
 
     #was 600 added width 1200
-    st.components.v1.html(html_data, height=600, width=1200, scrolling=True)
+    st.components.v1.html(html_data, height=1200, width=1200, scrolling=True)
 
 
 #############################
