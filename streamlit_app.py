@@ -334,18 +334,29 @@ def display_network_graph(edges, handle_to_name):
     net = Network(height="1200px", width="100%", directed=True, bgcolor="#222222", font_color="white")
 
     # Let the layout run, then stabilize (stop shaking):
-    net.set_options("""
-    var options = {
+    net.set_options('''
+    {
+      "configure": {
+        "enabled": true,
+        "filter": ["physics"]
+      },
       "physics": {
         "enabled": true,
-        "solver": "barnesHut",
-        "stabilization": {
-          "enabled": true,
-          "iterations": 500
-        }
+        "solver": "repulsion",
+        "repulsion": {
+          "centralGravity": 0,
+          "springLength": 240,
+          "springConstant": 0.42,
+          "nodeDistance": 225,
+          "damping": 1
+        },
+        "maxVelocity": 50,
+        "minVelocity": 0.75,
+        "timestep": 0.28
       }
     }
-    """)
+    ''')
+    
 
     # Calculate in-degree and add nodes
     in_degs = dict(G.in_degree())
