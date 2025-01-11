@@ -366,6 +366,8 @@ def display_network_graph(edges, handle_to_name):
 
     #was 600 added width 1200
     st.components.v1.html(html_data, height=1200, width=1200, scrolling=True)
+    net.toggle_physics(False)
+
 
 
 #############################
