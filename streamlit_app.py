@@ -333,8 +333,8 @@ def display_network_graph(edges, handle_to_name):
         G.add_node(followed)
         G.add_edge(follower, followed)
 
-    net = Network(height="600px", width="100%", directed=True, bgcolor="#222222", font_color="white")
-    net.toggle_physics(True)
+    net = Network(height="1200px", width="100%", directed=True, bgcolor="#222222", font_color="white")
+    net.toggle_physics(False)
 
     # Calculate in-degree
     in_degs = dict(G.in_degree())
@@ -366,7 +366,7 @@ def display_network_graph(edges, handle_to_name):
 
     #was 600 added width 1200
     st.components.v1.html(html_data, height=1200, width=1200, scrolling=True)
-    net.toggle_physics(False)
+
 
 
 
