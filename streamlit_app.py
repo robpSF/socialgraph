@@ -110,6 +110,12 @@ def main():
                 st.write("### Network Diagram (Nodes labeled by Name)")
                 display_network_graph(edges, handle_to_name)
 
+            # **NEW**: Show table of personas ranked by in-degree
+            ranking_df = build_indegree_table(personas, edges)
+            st.write("### Personas by Indegree (Incoming Connections)")
+            st.dataframe(ranking_df)
+            
+
             # Finally, let user download the Excel adjacency
             st.write("### Download Excel of the Network")
             download_excel_button(personas, edges, filename="network.xlsx")
@@ -390,7 +396,43 @@ def display_network_graph(edges, handle_to_name):
 
 
 #############################
-# 5. EXCEL EXPORT           #
+# 5. BUILD INDEGREE TABLE  #
+#############################
+
+def build_indegree_table(personas, edges):
+    """
+    Create a sorted table of (Persona, Faction, Indegree).
+    """
+    # Map each handle -> index
+    handle_to_index = {p["Handle"]: i for i, p in enumerate(personas)}
+    n = len(personas)
+
+    # Build in_edges
+    in_edges = [set() for _ in range(n)]
+    for (u, v) in edges:
+        if u in handle_to_index and v in handle_to_index:
+            i_u = handle_to_index[u]
+            i_v = handle_to_index[v]
+            in_edges[i_v].add(i_u)
+
+    # Create table of (Persona, Faction, Indegree)
+    rows = []
+    for i, p in enumerate(personas):
+        persona_name = p["Name"]
+        faction = p["Faction"]
+        indeg = len(in_edges[i])
+        rows.append({
+            "Persona": persona_name,
+            "Faction": faction,
+            "Indegree": indeg
+        })
+
+    # Sort descending by indegree
+    rows.sort(key=lambda x: x["Indegree"], reverse=True)
+    return pd.DataFrame(rows)
+
+#############################
+# 6. EXCEL EXPORT           #
 #############################
 
 def create_downloadable_excel(personas, edges):
